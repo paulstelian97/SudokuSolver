@@ -63,11 +63,7 @@ object HiddenSingles: SolverStrategy() {
     }
     private fun invokeUncached(cell: Cell, clue: Int): Boolean {
         // Check if this clue is alone in either row, column or primitive
-        if (cell.parentBoard.getLineCount(cell.line, clue) == 1)
-            return cell.setClue(clue)
-        if (cell.parentBoard.getColCount(cell.col, clue) == 1)
-            return cell.setClue(clue)
-        if (cell.parentBoard.getBoxCount(cell.box, clue) == 1)
+        if (cell.parentBoard.isAlone(cell, clue))
             return cell.setClue(clue)
         return false
     }

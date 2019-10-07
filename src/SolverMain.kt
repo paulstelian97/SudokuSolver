@@ -2,23 +2,29 @@ import kotlin.system.measureTimeMillis
 
 fun atMostOneBit(i: Int) = i and (i-1) == 0
 fun exactlyOneBit(i: Int) = i != 0 && atMostOneBit(i)
-@UseExperimental(ExperimentalStdlibApi::class)
-fun maskToClue(i: Int) = i.countTrailingZeroBits()
 
-class Board {
-    private val board : Array<Short> = Array(81) { 511.toShort() }
+typealias DArray = Array<Array<Int>>
+
+fun recursiveClone(arr: DArray?): DArray? {
+    return arr?.clone()?.map { it.clone() }?.toTypedArray()
+}
+
+class Board private constructor(copyFrom: Board?) {
+    private val board : Array<Short> = copyFrom?.board?.clone() ?: Array(81) { 511.toShort() }
+
+    constructor() : this(null)
 
     // These hold the counts of notes for each clue on every one of the primitives
-    private val lines = Array(9) { Array(9) { 9 } }
-    private val columns = Array(9) { Array(9) { 9 } }
-    private val boxes = Array(9) { Array(9) { 9 } }
+    private val lines: DArray = recursiveClone(copyFrom?.lines) ?: Array(9) { Array(9) { 9 } }
+    private val columns: DArray = recursiveClone(copyFrom?.columns) ?: Array(9) { Array(9) { 9 } }
+    private val boxes: DArray = recursiveClone(copyFrom?.boxes) ?: Array(9) { Array(9) { 9 } }
     // I may want to hold a bitmask instead for each clue and each of the squares inside the primitives?
     // Could it be helpful?
 
     // For each line keep a bitmask of cells that are solved
-    private val solvedLines = Array(9) {0}
-    private val solvedColumns = Array(9) {0}
-    private val solvedBoxes = Array(9) {0}
+    private val solvedLines: Array<Int> = copyFrom?.solvedLines?.clone() ?: Array(9) {0}
+    private val solvedColumns: Array<Int> = copyFrom?.solvedColumns?.clone() ?: Array(9) {0}
+    private val solvedBoxes: Array<Int> = copyFrom?.solvedBoxes?.clone() ?: Array(9) {0}
 
     operator fun get(line: Int, col: Int): Cell {
         require(line in 0..8)
@@ -28,41 +34,46 @@ class Board {
             override var bitmask: Int
                 get() = board[off].toInt()
                 set(value) {
-                    val added = value and bitmask.inv()
-                    val removed = bitmask and value.inv()
-                    if (solved) {
-                        solvedLines[line] = solvedLines[line] and (1 shl solvedValue!!).inv()
-                        solvedColumns[col] = solvedColumns[col] and (1 shl solvedValue!!).inv()
-                        solvedBoxes[box] = solvedBoxes[box] and (1 shl solvedValue!!).inv()
-                    }
-                    board[off] = value.toShort()
-                    if (solved) {
-                        solvedLines[line] = solvedLines[line] or (1 shl solvedValue!!)
-                        solvedColumns[col] = solvedColumns[col] or (1 shl solvedValue!!)
-                        solvedBoxes[box] = solvedBoxes[box] or (1 shl solvedValue!!)
-                    }
-                    if (value == 0)
-                        valid = false
-                    for (clue in 0..8) {
-                        if (added and (1 shl clue) != 0) {
-                            lines[clue][line]++
-                            columns[clue][col]++
-                            boxes[clue][box]++
-                        }
-                        if (removed and (1 shl clue) != 0) {
-                            if (lines[clue][line]-- == 1)
-                                valid = false
-                            if (columns[clue][col]-- == 1)
-                                valid = false
-                            if (boxes[clue][box]-- == 1)
-                                valid = false
-                        }
-                    }
+                    parentBoard[line, col] = value
                 }
             override val col = col
             override val line = line
             override val parentBoard = this@Board
             override val box = super.box // Optimize, convert getter to initializer
+        }
+    }
+
+    private operator fun set(line: Int, col: Int, value: Int) {
+        val cell = get(line, col)
+        val added = value and cell.bitmask.inv()
+        val removed = cell.bitmask and value.inv()
+        if (cell.solved) {
+            solvedLines[line] = solvedLines[line] and (1 shl cell.solvedValue!!).inv()
+            solvedColumns[col] = solvedColumns[col] and (1 shl cell.solvedValue!!).inv()
+            solvedBoxes[cell.box] = solvedBoxes[cell.box] and (1 shl cell.solvedValue!!).inv()
+        }
+        board[line * 9 + col] = value.toShort()
+        if (cell.solved) {
+            solvedLines[line] = solvedLines[line] or (1 shl cell.solvedValue!!)
+            solvedColumns[col] = solvedColumns[col] or (1 shl cell.solvedValue!!)
+            solvedBoxes[cell.box] = solvedBoxes[cell.box] or (1 shl cell.solvedValue!!)
+        }
+        if (value == 0)
+            valid = false
+        for (clue in 0..8) {
+            if (added and (1 shl clue) != 0) {
+                lines[clue][line]++
+                columns[clue][col]++
+                boxes[clue][cell.box]++
+            }
+            if (removed and (1 shl clue) != 0) {
+                if (lines[clue][line]-- == 1)
+                    valid = false
+                if (columns[clue][col]-- == 1)
+                    valid = false
+                if (boxes[clue][cell.box]-- == 1)
+                    valid = false
+            }
         }
     }
 
@@ -84,35 +95,17 @@ class Board {
         return result
     }
 
-    fun getLineCount(line: Int, clue: Int) = lines[clue][line]
-    fun getColCount(col: Int, clue: Int) = columns[clue][col]
-    fun getBoxCount(box: Int, clue: Int) = boxes[clue][box]
-    private fun getSolvedInLine(line: Int) = solvedLines[line]
-    private fun getSolvedInColumn(col: Int) = solvedColumns[col]
-    private fun getSolvedInBox(box: Int) = solvedBoxes[box]
+    // Used for Hidden Singles
+    fun isAlone(cell: Cell, clue: Int) =
+        lines[clue][cell.line] == 1 || columns[clue][cell.col] == 1 || boxes[clue][cell.box] == 1
+    // Used for Naked Singles
     fun getSolvedVisible(cell: Cell) =
-        getSolvedInLine(cell.line) or getSolvedInColumn(cell.col) or getSolvedInBox(cell.box)
+        solvedLines[cell.line] or solvedColumns[cell.col] or solvedBoxes[cell.box]
 
-    var valid: Boolean = true
+    var valid: Boolean = copyFrom?.valid ?: true
         private set
 
-    fun clone(): Board {
-        val result = Board()
-        for (off in 0 until 81)
-            result.board[off] = board[off]
-        for (x in 0 until 9) {
-            for (y in 0 until 9) {
-                result.lines[x][y] = lines[x][y]
-                result.columns[x][y] = columns[x][y]
-                result.boxes[x][y] = boxes[x][y]
-            }
-            result.solvedLines[x] = solvedLines[x]
-            result.solvedColumns[x] = solvedColumns[x]
-            result.solvedBoxes[x] = solvedBoxes[x]
-        }
-        result.valid = valid
-        return result
-    }
+    fun clone() = Board(this)
 
     fun saveList(): List<Short> = board.clone().asList()
 
@@ -143,6 +136,10 @@ class Board {
 }
 
 interface Cell {
+    var bitmask: Int
+    val parentBoard: Board
+    val line: Int
+    val col: Int
     val possibilities: Set<Int> get() {
         val result = mutableSetOf<Int>()
         for (shift in 0..8)
@@ -152,7 +149,6 @@ interface Cell {
     }
     val solved: Boolean get() = exactlyOneBit(bitmask)
     val solvedValue: Int? get() = if (solved) possibilities.elementAt(0) else null
-    var bitmask: Int
     val str: String get() {
         if (bitmask == 511)
             return "*"
@@ -174,9 +170,6 @@ interface Cell {
         bitmask = newmask
         return true
     }
-    val parentBoard: Board
-    val line: Int
-    val col: Int
     fun setClue(clue: Int): Boolean {
         require(clue in 0..8)
         val newMask = 1 shl clue
